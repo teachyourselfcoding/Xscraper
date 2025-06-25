@@ -48,12 +48,22 @@ def save_tweet(tweet_data, date):
                 f.write(f"\n![img]({img})  <!-- failed to download -->\n")
                 print(f"⚠️ Failed to download image: {e}")
         if tweet_data.get("quoted"):
-            f.write("\n\t> 🧵 Quoted Tweet")
+            f.write("\n> 🧵 Quoted Tweet")
             if tweet_data["quoted"].get("datetime"):
                 qdt = tweet_data["quoted"]["datetime"]
                 f.write(f" — {qdt}")
             f.write(":\n")
-            f.write(f"\t> {tweet_data['quoted']['text']}\n")
+            # Write each line of quoted text as a markdown blockquote
+            quoted_text = tweet_data['quoted']['text']
+            if quoted_text:
+                for line in quoted_text.splitlines():
+                    if line.strip():
+                        f.write(f"> {line}\n")
+                    else:
+                        f.write(">\n")
+                # Extra blockquote line for spacing before image
+                f.write(">\n")
+            # Add quoted images (no >)
             for qimg in tweet_data['quoted']['images']:
                 qfilename = f"{uuid.uuid4().hex[:8]}.jpg"
                 qimg_path = DAILY_DIR / qfilename
@@ -61,9 +71,9 @@ def save_tweet(tweet_data, date):
                     qresponse = requests.get(qimg, timeout=10)
                     with qimg_path.open("wb") as qf:
                         qf.write(qresponse.content)
-                    f.write(f"\n    ![img]({qimg_path.name})\n")
+                    f.write(f"![img]({qimg_path.name})\n")
                 except Exception as e:
-                    f.write(f"\n    ![img]({qimg})  <!-- failed to download -->\n")
+                    f.write(f"![img]({qimg})  <!-- failed to download -->\n")
                     print(f"⚠️ Failed to download quoted image: {e}")
         f.write("\n---\n")
 
@@ -98,6 +108,8 @@ def scrape_tweets(page, target_date=None):
             except Exception:
                 pass
 
+            print(f"ScrapeCheck: {tweet_id} {dt.strftime('%H:%M')} {text[:40]}...")
+
             # Check for quoted tweet
             quoted_data = None
             try:
@@ -109,7 +121,6 @@ def scrape_tweets(page, target_date=None):
                 for i in range(anchors.count()):
                     href = anchors.nth(i).get_attribute("href")
                     if href and "/status/" in href:
-                        # Accept only permalinks of the form /status/{id} (allow query params, disallow /photo etc.)
                         match = re.search(r'/status/(\d+)(?:[/?]|$)', href)
                         if match:
                             tid = match.group(1)
@@ -242,6 +253,7 @@ def main():
             scroll_attempt += 1
 
         for tweet in sorted(all_tweets, key=lambda t: (t["date"], t["time"])):
+            print(f"FinalList: {tweet.get('tweet_id')} {tweet['time']} {tweet['text'][:40]}...")
             save_tweet(tweet, tweet["date"])
         print(f"✅ Saved {len(all_tweets)} tweets from {TARGET_DATE}.")
         if hasattr(page, "context") and page.context:
