@@ -45,6 +45,20 @@ def save_tweet(tweet_data, date):
             except Exception as e:
                 f.write(f"\n![img]({img})  <!-- failed to download -->\n")
                 print(f"⚠️ Failed to download image: {e}")
+        if tweet_data.get("quoted"):
+            f.write("\n> 🧵 Quoted Tweet:\n")
+            f.write(f"> {tweet_data['quoted']['text']}\n")
+            for qimg in tweet_data['quoted']['images']:
+                qfilename = f"{uuid.uuid4().hex[:8]}.jpg"
+                qimg_path = DAILY_DIR / qfilename
+                try:
+                    qresponse = requests.get(qimg, timeout=10)
+                    with qimg_path.open("wb") as qf:
+                        qf.write(qresponse.content)
+                    f.write(f"\n> ![img]({qimg_path.name})\n")
+                except Exception as e:
+                    f.write(f"\n> ![img]({qimg})  <!-- failed to download -->\n")
+                    print(f"⚠️ Failed to download quoted image: {e}")
         f.write("\n---\n")
 
 def scrape_tweets(page, target_date=None):
@@ -66,11 +80,27 @@ def scrape_tweets(page, target_date=None):
             imgs = el.locator("img").all()
             img_urls = [img.get_attribute("src") for img in imgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
 
+            # Check for quoted tweet
+            quoted_data = None
+            try:
+                quoted_el = el.locator("article").nth(1)
+                if quoted_el.count() > 0:
+                    quoted_text = quoted_el.inner_text().strip()
+                    quoted_imgs = quoted_el.locator("img").all()
+                    quoted_img_urls = [img.get_attribute("src") for img in quoted_imgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
+                    quoted_data = {
+                        "text": quoted_text,
+                        "images": quoted_img_urls
+                    }
+            except Exception:
+                pass
+
             tweets.append({
                 "text": text,
                 "images": img_urls,
                 "time": dt.strftime("%H:%M"),
-                "date": dt.date()
+                "date": dt.date(),
+                "quoted": quoted_data
             })
         except Exception as e:
             print(f"⚠️ Error reading tweet: {e}")
