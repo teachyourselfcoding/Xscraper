@@ -6,6 +6,8 @@ import os
 from dotenv import load_dotenv
 import requests
 import uuid
+import time
+import re
 load_dotenv()
 
 # ---- CONFIGURATION ----
@@ -46,8 +48,12 @@ def save_tweet(tweet_data, date):
                 f.write(f"\n![img]({img})  <!-- failed to download -->\n")
                 print(f"⚠️ Failed to download image: {e}")
         if tweet_data.get("quoted"):
-            f.write("\n> 🧵 Quoted Tweet:\n")
-            f.write(f"> {tweet_data['quoted']['text']}\n")
+            f.write("\n\t> 🧵 Quoted Tweet")
+            if tweet_data["quoted"].get("datetime"):
+                qdt = tweet_data["quoted"]["datetime"]
+                f.write(f" — {qdt}")
+            f.write(":\n")
+            f.write(f"\t> {tweet_data['quoted']['text']}\n")
             for qimg in tweet_data['quoted']['images']:
                 qfilename = f"{uuid.uuid4().hex[:8]}.jpg"
                 qimg_path = DAILY_DIR / qfilename
@@ -55,13 +61,14 @@ def save_tweet(tweet_data, date):
                     qresponse = requests.get(qimg, timeout=10)
                     with qimg_path.open("wb") as qf:
                         qf.write(qresponse.content)
-                    f.write(f"\n> ![img]({qimg_path.name})\n")
+                    f.write(f"\n    ![img]({qimg_path.name})\n")
                 except Exception as e:
-                    f.write(f"\n> ![img]({qimg})  <!-- failed to download -->\n")
+                    f.write(f"\n    ![img]({qimg})  <!-- failed to download -->\n")
                     print(f"⚠️ Failed to download quoted image: {e}")
         f.write("\n---\n")
 
 def scrape_tweets(page, target_date=None):
+    context = page.context
     tweets = []
     tweet_blocks = page.locator("article")
 
@@ -80,27 +87,88 @@ def scrape_tweets(page, target_date=None):
             imgs = el.locator("img").all()
             img_urls = [img.get_attribute("src") for img in imgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
 
+            # Extract tweet ID from the first <a> with /status/
+            tweet_id = None
+            try:
+                for a in el.locator('a').all():
+                    href = a.get_attribute('href')
+                    if href and '/status/' in href:
+                        tweet_id = href.split('/status/')[-1].split('?')[0]
+                        break
+            except Exception:
+                pass
+
             # Check for quoted tweet
             quoted_data = None
             try:
-                quoted_el = el.locator("article").nth(1)
-                if quoted_el.count() > 0:
-                    quoted_text = quoted_el.inner_text().strip()
-                    quoted_imgs = quoted_el.locator("img").all()
-                    quoted_img_urls = [img.get_attribute("src") for img in quoted_imgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
-                    quoted_data = {
-                        "text": quoted_text,
-                        "images": quoted_img_urls
-                    }
-            except Exception:
-                pass
+                quoted_url = None
+                # Find all links to status pages in the tweet
+                anchors = el.locator("a")
+                main_tweet_id = tweet_id if 'tweet_id' in locals() else None
+                status_links = []
+                for i in range(anchors.count()):
+                    href = anchors.nth(i).get_attribute("href")
+                    if href and "/status/" in href:
+                        # Accept only permalinks of the form /status/{id} (allow query params, disallow /photo etc.)
+                        match = re.search(r'/status/(\d+)(?:[/?]|$)', href)
+                        if match:
+                            tid = match.group(1)
+                            if (
+                                (main_tweet_id is None or tid != main_tweet_id)
+                                and (
+                                    href.rstrip('/').endswith(f"/status/{tid}")
+                                    or re.search(rf'/status/{tid}\?(?=\w)', href)
+                                )
+                            ):
+                                status_links.append(href)
+                if status_links:
+                    quoted_url = "https://twitter.com" + status_links[0]
+                if quoted_url:
+                    print(f"🔗 Opening quoted tweet: {quoted_url}")
+                    browser = context.browser
+                    storage = context.storage_state()
+                    quote_context = browser.new_context(storage_state=storage)
+                    new_page = quote_context.new_page()
+                    new_page.goto(quoted_url)
+                    try:
+                        new_page.wait_for_selector("article", timeout=7000)
+                        # Click 'Show more' if present
+                        show_more_buttons = new_page.locator("div[role=button]:has-text('Show more')")
+                        if show_more_buttons.count() > 0:
+                            try:
+                                show_more_buttons.first.click(timeout=2000)
+                                print("📝 Clicked 'Show more' on quoted tweet.")
+                                time.sleep(1)
+                            except Exception as e:
+                                print(f"⚠️ Could not click 'Show more': {e}")
+                        qarticle = new_page.locator("article").first
+                        qtext = qarticle.inner_text().strip()
+                        qimgs = qarticle.locator("img").all()
+                        qimg_urls = [img.get_attribute("src") for img in qimgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
+                        qtime_el = qarticle.locator("time")
+                        qtime_str = qtime_el.first.get_attribute("datetime") if qtime_el.count() > 0 else None
+                        quoted_data = {
+                            "text": qtext,
+                            "images": qimg_urls,
+                            "datetime": qtime_str
+                        }
+                    except Exception as e:
+                        print(f"⚠️ Error scraping quoted tweet page: {e}")
+                    finally:
+                        new_page.close()
+                        quote_context.close()
+                else:
+                    print(f"⚠️ No quoted tweet link found; using timeline fragment if available.")
+            except Exception as e:
+                print(f"⚠️ Failed to fetch quoted tweet: {e}")
 
             tweets.append({
                 "text": text,
                 "images": img_urls,
                 "time": dt.strftime("%H:%M"),
                 "date": dt.date(),
-                "quoted": quoted_data
+                "quoted": quoted_data,
+                "tweet_id": tweet_id
             })
         except Exception as e:
             print(f"⚠️ Error reading tweet: {e}")
@@ -123,33 +191,54 @@ def main():
         page.wait_for_timeout(5000)
 
         all_tweets = []
-        started_collecting = False
-        scroll_attempt = 0
+        seen_tweet_ids = set()
+
+        # Capture initial batch before any scrolling
+        new_tweets = scrape_tweets(page, target_date=None)
+        print(f"🔄 Initial page — scraped {len(new_tweets)} tweets")
+        new_found = 0
+        for tweet in new_tweets:
+            if tweet["date"] == TARGET_DATE:
+                tweet_id = tweet.get("tweet_id")
+                key = tweet_id if tweet_id else (tweet["text"], tweet["time"])
+                if key not in seen_tweet_ids:
+                    seen_tweet_ids.add(key)
+                    all_tweets.append(tweet)
+                    new_found += 1
+        print(f"✅ Found {new_found} new tweets for {TARGET_DATE} on initial load.")
+
         max_scrolls = 50  # safety net
+        scroll_attempt = 0
+        last_seen_count = -1  # for stopping condition
 
         while scroll_attempt < max_scrolls:
             page.mouse.wheel(0, 5000)
-            page.wait_for_timeout(2000)
-            new_tweets = scrape_tweets(page, target_date=None)
-            print(f"🔄 Scroll {scroll_attempt + 1} — scraped {len(new_tweets)} tweets")
-
-            stop_now = False
-            for tweet in new_tweets:
-                print(f"📅 Found tweet dated {tweet['date']} — target: {TARGET_DATE}")
-                if tweet["date"] > TARGET_DATE:
-                    continue  # not yet at target
-                elif tweet["date"] == TARGET_DATE:
-                    if tweet not in all_tweets:
-                        all_tweets.append(tweet)
-                        started_collecting = True
-                elif tweet["date"] < TARGET_DATE and started_collecting:
-                    print(f"🛑 Reached older date ({tweet['date']}) after collecting — stopping.")
-                    stop_now = True
+            prev_count = page.locator("article").count()
+            for _ in range(14):  # wait up to 7 seconds
+                time.sleep(0.5)
+                curr_count = page.locator("article").count()
+                if curr_count > prev_count:
                     break
 
-            if stop_now:
-                break
+            new_tweets = scrape_tweets(page, target_date=None)
+            print(f"🔄 Scroll {scroll_attempt + 1} — scraped {len(new_tweets)} tweets")
+            new_found = 0
+            for tweet in new_tweets:
+                if tweet["date"] == TARGET_DATE:
+                    tweet_id = tweet.get("tweet_id")
+                    key = tweet_id if tweet_id else (tweet["text"], tweet["time"])
+                    if key not in seen_tweet_ids:
+                        seen_tweet_ids.add(key)
+                        all_tweets.append(tweet)
+                        new_found += 1
 
+            print(f"✅ Found {new_found} new tweets for {TARGET_DATE} this scroll.")
+
+            # If we found 0 new tweets for the target date in this scroll, assume we're done
+            if new_found == 0 and last_seen_count == 0:
+                print("🛑 No new tweets for target date after two consecutive scrolls. Stopping.")
+                break
+            last_seen_count = new_found
             scroll_attempt += 1
 
         for tweet in sorted(all_tweets, key=lambda t: (t["date"], t["time"])):
