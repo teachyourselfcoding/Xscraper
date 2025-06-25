@@ -1,0 +1,5 @@
+/notebooks
+.env
+.gitattributes
+.DS_Store
+/.idea
