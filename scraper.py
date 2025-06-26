@@ -1,5 +1,7 @@
 def expand_show_more(el):
     # Click all visible "Show more" or "显示更多" in this article element, until none are left
+    """Click all visible 'Show more' or '显示更多' in this article element, until none are left.
+    Returns True if NO more show more buttons remain after expansion, False if any remain."""
     while True:
         show_more_buttons = el.locator("div[role=button]:has-text('Show more'), div[role=button]:has-text('显示更多')")
         if show_more_buttons.count() > 0:
@@ -11,6 +13,9 @@ def expand_show_more(el):
                 break
         else:
             break
+    # After expansion, check if any show more buttons remain
+    show_more_buttons = el.locator("div[role=button]:has-text('Show more'), div[role=button]:has-text('显示更多')")
+    return show_more_buttons.count() == 0
 # scraper.py
 from playwright.sync_api import sync_playwright
 import datetime
@@ -130,20 +135,12 @@ def scrape_tweets(page, target_date=None):
     tweets = []
     tweet_blocks = page.locator("article[role='article']")
 
-    # Collect all status links on the page for later deep extraction
-    all_status_links = set()
-    for a in page.locator("a").all():
-        href = a.get_attribute('href')
-        if href and '/status/' in href:
-            # Accept only pure permalinks of the form /status/{id} or /status/{id}?query (not /photo/1 or /analytics)
-            match = re.search(r'/status/(\d+)(?P<after>/[a-zA-Z0-9_/-]+|\?|$)', href)
-            if match:
-                tid = match.group(1)
-                after = match.group("after")
-                if after == "" or after == "?" or after.startswith("?"):
-                    all_status_links.add((tid, href))
-
+    # For deep-scrape logic:
+    deep_scrape_urls = set()
     scraped_ids = set()
+    timeline_tweet_ids = set()
+    tweet_id_to_url = dict()
+
     for el in tweet_blocks.all():
         try:
             time_el = el.locator("time").first
@@ -155,36 +152,42 @@ def scrape_tweets(page, target_date=None):
             if target_date is not None and dt.date() != target_date:
                 continue
 
-            expand_show_more(el)
+            # Expand show more, and check if any remain
+            no_more_show_more = expand_show_more(el)
             text = el.inner_text().strip()
             imgs = el.locator("img").all()
             img_urls = [img.get_attribute("src") for img in imgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
 
-            # Extract tweet ID from the first <a> with /status/
+            # Extract tweet ID and its canonical url
             tweet_id = None
+            tweet_url = None
             try:
                 for a in el.locator('a').all():
                     href = a.get_attribute('href')
                     if href and '/status/' in href:
                         tweet_id = href.split('/status/')[-1].split('?')[0]
+                        tweet_url = "https://twitter.com" + href if not href.startswith("http") else href
                         break
             except Exception:
                 pass
+
+            if tweet_id:
+                timeline_tweet_ids.add(tweet_id)
+                if tweet_url:
+                    tweet_id_to_url[tweet_id] = tweet_url
 
             print(f"ScrapeCheck: {tweet_id} {dt.strftime('%H:%M')} {text[:40]}...")
 
             # Check for quoted tweet
             quoted_data = None
+            quoted_url = None
             try:
-                quoted_url = None
-                # Find all links to status pages in the tweet
                 anchors = el.locator("a")
                 main_tweet_id = tweet_id if 'tweet_id' in locals() else None
                 status_links = []
                 for i in range(anchors.count()):
                     href = anchors.nth(i).get_attribute("href")
                     if href and "/status/" in href:
-                        # Accept only pure permalinks of the form /status/{id} or /status/{id}?query (not /photo/1 or /analytics)
                         match = re.search(r'/status/(\d+)(?P<after>/[a-zA-Z0-9_/-]+|\?|$)', href)
                         if match:
                             tid = match.group(1)
@@ -196,67 +199,55 @@ def scrape_tweets(page, target_date=None):
                                 status_links.append(href)
                 if status_links:
                     quoted_url = "https://twitter.com" + status_links[0]
-                if quoted_url:
-                    print(f"🔗 Opening quoted tweet: {quoted_url}")
-                    browser = context.browser
-                    storage = context.storage_state()
-                    quote_context = browser.new_context(storage_state=storage)
-                    new_page = quote_context.new_page()
-                    new_page.goto(quoted_url)
-                    try:
-                        new_page.wait_for_selector("article", timeout=7000)
-                        qarticle = new_page.locator("article").first
-                        expand_show_more(qarticle)
-                        qtext = qarticle.inner_text().strip()
-                        qimgs = qarticle.locator("img").all()
-                        qimg_urls = [img.get_attribute("src") for img in qimgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
-                        qtime_el = qarticle.locator("time")
-                        qtime_str = qtime_el.first.get_attribute("datetime") if qtime_el.count() > 0 else None
-                        quoted_data = {
-                            "text": qtext,
-                            "images": qimg_urls,
-                            "datetime": qtime_str
-                        }
-                    except Exception as e:
-                        print(f"⚠️ Error scraping quoted tweet page: {e}")
-                    finally:
-                        new_page.close()
-                        quote_context.close()
-                else:
-                    # Try to log HTML of the quote block for diagnosis
-                    try:
-                        quoted_el = el.locator('[data-testid="tweet"] [tabindex="0"] article[role="article"]').nth(1)
-                        html = quoted_el.inner_html() if quoted_el.count() > 0 else '(no quoted_el)'
-                        print(f"⚠️ Quoted tweet block HTML:\n{html}")
-                    except Exception as log_e:
-                        print(f"⚠️ Could not log quoted tweet HTML: {log_e}")
-                    print(f"⚠️ No quoted tweet link found; using timeline fragment if available.")
             except Exception as e:
                 print(f"⚠️ Failed to fetch quoted tweet: {e}")
+
+            # Decide if this tweet needs deep-scrape: (1) Show more not fully expanded, (2) quoting, (3) replying
+            # 1. Show more not fully expanded
+            if tweet_id and not no_more_show_more and tweet_url:
+                deep_scrape_urls.add(tweet_url)
+            # 2. Quoted tweet
+            if quoted_url:
+                deep_scrape_urls.add(quoted_url)
+            # 3. Replying to another tweet
+            reply_match = re.search(r"^Replying to @([A-Za-z0-9_]+)", text, re.MULTILINE)
+            if reply_match:
+                # Try to find a replied-to tweet url from anchors that is not our own tweet
+                # Heuristic: find first anchor with /status/ that is not our own tweet_id
+                for i in range(anchors.count()):
+                    href = anchors.nth(i).get_attribute("href")
+                    if href and "/status/" in href:
+                        match = re.search(r'/status/(\d+)', href)
+                        if match:
+                            tid = match.group(1)
+                            if tweet_id is None or tid != tweet_id:
+                                reply_url = "https://twitter.com" + href
+                                deep_scrape_urls.add(reply_url)
+                                break
 
             tweets.append({
                 "text": text,
                 "images": img_urls,
                 "time": dt.strftime("%H:%M"),
                 "date": dt.date(),
-                "quoted": quoted_data,
+                "quoted": None,  # Don't scrape quoted tweet inline, only via deep-scrape
                 "tweet_id": tweet_id
             })
             if tweet_id:
                 scraped_ids.add(tweet_id)
         except Exception as e:
             print(f"⚠️ Error reading tweet: {e}")
-    # Deep scrape for unseen tweets by ID
-    # Deep scrape: open every unique /status/{id} (not just unseen ones)
-    if all_status_links:
+
+    # Deep scrape phase: open each url in deep_scrape_urls (throttle), single context
+    if deep_scrape_urls:
         browser = context.browser
         storage = context.storage_state()
-        for tid, href in all_status_links:
-            full_url = "https://twitter.com" + href if not href.startswith("http") else href
+        deep_context = browser.new_context(storage_state=storage)
+        for url in deep_scrape_urls:
             try:
-                quote_context = browser.new_context(storage_state=storage)
-                new_page = quote_context.new_page()
-                new_page.goto(full_url)
+                print(f"🔎 Deep-scraping: {url}")
+                new_page = deep_context.new_page()
+                new_page.goto(url)
                 try:
                     new_page.wait_for_selector("article", timeout=7000)
                     qarticle = new_page.locator("article").first
@@ -269,6 +260,19 @@ def scrape_tweets(page, target_date=None):
                     qdt = None
                     if qtime_str:
                         qdt = datetime.datetime.fromisoformat(qtime_str.replace("Z", "+00:00")).astimezone()
+                    # Extract tweet_id from url (fallback: from <a> in article)
+                    qtweet_id = None
+                    qhrefs = qarticle.locator('a')
+                    for i in range(qhrefs.count()):
+                        href = qhrefs.nth(i).get_attribute("href")
+                        if href and '/status/' in href:
+                            qtweet_id = href.split('/status/')[-1].split('?')[0]
+                            break
+                    if not qtweet_id:
+                        # Try to extract from url
+                        m = re.search(r'/status/(\d+)', url)
+                        if m:
+                            qtweet_id = m.group(1)
                     # Only add if matches target_date
                     if target_date is None or (qdt and qdt.date() == target_date):
                         tweets.append({
@@ -277,15 +281,17 @@ def scrape_tweets(page, target_date=None):
                             "time": qdt.strftime("%H:%M") if qdt else "",
                             "date": qdt.date() if qdt else None,
                             "quoted": None,
-                            "tweet_id": tid
+                            "tweet_id": qtweet_id
                         })
                 except Exception as e:
-                    print(f"⚠️ Error scraping tweet {tid} via permalink: {e}")
+                    print(f"⚠️ Error scraping tweet via deep-scrape: {e}")
                 finally:
                     new_page.close()
-                    quote_context.close()
+                time.sleep(2)
             except Exception as e:
-                print(f"⚠️ Could not open context for tweet {tid}: {e}")
+                print(f"⚠️ Could not open context for deep-scrape: {e}")
+        deep_context.close()
+
     # Deduplicate: only by tweet_id (never by (text, time)), except when tweet_id is missing.
     deduped = {}
     for t in tweets:
