@@ -1,3 +1,16 @@
+def expand_show_more(el):
+    # Click all visible "Show more" or "显示更多" in this article element, until none are left
+    while True:
+        show_more_buttons = el.locator("div[role=button]:has-text('Show more'), div[role=button]:has-text('显示更多')")
+        if show_more_buttons.count() > 0:
+            try:
+                show_more_buttons.first.click(timeout=2000)
+                time.sleep(1.5)
+            except Exception as e:
+                print(f"⚠️ Could not click 'Show more': {e}")
+                break
+        else:
+            break
 # scraper.py
 from playwright.sync_api import sync_playwright
 import datetime
@@ -36,6 +49,41 @@ def save_tweet(tweet_data, date):
     with notebook.open("a", encoding="utf-8") as f:
         f.write(f"\n### 🧾 {tweet_data['time']}\n")
         f.write(tweet_data["text"] + "\n")
+        # Enhanced fallback for quoting:
+        if not tweet_data.get("quoted"):
+            text = tweet_data["text"]
+            # Handle Quote marker
+            if "Quote " in text:
+                main_body, quote = text.split("Quote ", 1)
+                f.write(main_body.strip() + "\n")
+                # Blockquote the rest
+                for line in quote.splitlines():
+                    if line.strip():
+                        f.write(f"> {line}\n")
+                    else:
+                        f.write(">\n")
+                f.write("\n---\n")
+                return
+            # Handle "Replying to ..." marker
+            lines = text.splitlines()
+            reply_idx = None
+            for i, line in enumerate(lines):
+                if line.strip().startswith("Replying to @"):
+                    reply_idx = i
+                    break
+            if reply_idx is not None:
+                # Write lines before "Replying to"
+                for l in lines[:reply_idx]:
+                    if l.strip():
+                        f.write(l.strip() + "\n")
+                # Blockquote lines after (including the reply marker)
+                for l in lines[reply_idx:]:
+                    if l.strip():
+                        f.write(f"> {l}\n")
+                    else:
+                        f.write(">\n")
+                f.write("\n---\n")
+                return
         for img in tweet_data["images"]:
             filename = f"{uuid.uuid4().hex[:8]}.jpg"
             img_path = DAILY_DIR / filename
@@ -80,8 +128,22 @@ def save_tweet(tweet_data, date):
 def scrape_tweets(page, target_date=None):
     context = page.context
     tweets = []
-    tweet_blocks = page.locator("article")
+    tweet_blocks = page.locator("article[role='article']")
 
+    # Collect all status links on the page for later deep extraction
+    all_status_links = set()
+    for a in page.locator("a").all():
+        href = a.get_attribute('href')
+        if href and '/status/' in href:
+            # Accept only pure permalinks of the form /status/{id} or /status/{id}?query (not /photo/1 or /analytics)
+            match = re.search(r'/status/(\d+)(?P<after>/[a-zA-Z0-9_/-]+|\?|$)', href)
+            if match:
+                tid = match.group(1)
+                after = match.group("after")
+                if after == "" or after == "?" or after.startswith("?"):
+                    all_status_links.add((tid, href))
+
+    scraped_ids = set()
     for el in tweet_blocks.all():
         try:
             time_el = el.locator("time").first
@@ -93,6 +155,7 @@ def scrape_tweets(page, target_date=None):
             if target_date is not None and dt.date() != target_date:
                 continue
 
+            expand_show_more(el)
             text = el.inner_text().strip()
             imgs = el.locator("img").all()
             img_urls = [img.get_attribute("src") for img in imgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
@@ -121,15 +184,14 @@ def scrape_tweets(page, target_date=None):
                 for i in range(anchors.count()):
                     href = anchors.nth(i).get_attribute("href")
                     if href and "/status/" in href:
-                        match = re.search(r'/status/(\d+)(?:[/?]|$)', href)
+                        # Accept only pure permalinks of the form /status/{id} or /status/{id}?query (not /photo/1 or /analytics)
+                        match = re.search(r'/status/(\d+)(?P<after>/[a-zA-Z0-9_/-]+|\?|$)', href)
                         if match:
                             tid = match.group(1)
+                            after = match.group("after")
                             if (
                                 (main_tweet_id is None or tid != main_tweet_id)
-                                and (
-                                    href.rstrip('/').endswith(f"/status/{tid}")
-                                    or re.search(rf'/status/{tid}\?(?=\w)', href)
-                                )
+                                and (after == "" or after == "?" or after.startswith("?"))
                             ):
                                 status_links.append(href)
                 if status_links:
@@ -143,16 +205,8 @@ def scrape_tweets(page, target_date=None):
                     new_page.goto(quoted_url)
                     try:
                         new_page.wait_for_selector("article", timeout=7000)
-                        # Click 'Show more' if present
-                        show_more_buttons = new_page.locator("div[role=button]:has-text('Show more')")
-                        if show_more_buttons.count() > 0:
-                            try:
-                                show_more_buttons.first.click(timeout=2000)
-                                print("📝 Clicked 'Show more' on quoted tweet.")
-                                time.sleep(1)
-                            except Exception as e:
-                                print(f"⚠️ Could not click 'Show more': {e}")
                         qarticle = new_page.locator("article").first
+                        expand_show_more(qarticle)
                         qtext = qarticle.inner_text().strip()
                         qimgs = qarticle.locator("img").all()
                         qimg_urls = [img.get_attribute("src") for img in qimgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
@@ -169,6 +223,13 @@ def scrape_tweets(page, target_date=None):
                         new_page.close()
                         quote_context.close()
                 else:
+                    # Try to log HTML of the quote block for diagnosis
+                    try:
+                        quoted_el = el.locator('[data-testid="tweet"] [tabindex="0"] article[role="article"]').nth(1)
+                        html = quoted_el.inner_html() if quoted_el.count() > 0 else '(no quoted_el)'
+                        print(f"⚠️ Quoted tweet block HTML:\n{html}")
+                    except Exception as log_e:
+                        print(f"⚠️ Could not log quoted tweet HTML: {log_e}")
                     print(f"⚠️ No quoted tweet link found; using timeline fragment if available.")
             except Exception as e:
                 print(f"⚠️ Failed to fetch quoted tweet: {e}")
@@ -181,9 +242,60 @@ def scrape_tweets(page, target_date=None):
                 "quoted": quoted_data,
                 "tweet_id": tweet_id
             })
+            if tweet_id:
+                scraped_ids.add(tweet_id)
         except Exception as e:
             print(f"⚠️ Error reading tweet: {e}")
-    return tweets
+    # Deep scrape for unseen tweets by ID
+    # Deep scrape: open every unique /status/{id} (not just unseen ones)
+    if all_status_links:
+        browser = context.browser
+        storage = context.storage_state()
+        for tid, href in all_status_links:
+            full_url = "https://twitter.com" + href if not href.startswith("http") else href
+            try:
+                quote_context = browser.new_context(storage_state=storage)
+                new_page = quote_context.new_page()
+                new_page.goto(full_url)
+                try:
+                    new_page.wait_for_selector("article", timeout=7000)
+                    qarticle = new_page.locator("article").first
+                    expand_show_more(qarticle)
+                    qtext = qarticle.inner_text().strip()
+                    qimgs = qarticle.locator("img").all()
+                    qimg_urls = [img.get_attribute("src") for img in qimgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
+                    qtime_el = qarticle.locator("time")
+                    qtime_str = qtime_el.first.get_attribute("datetime") if qtime_el.count() > 0 else None
+                    qdt = None
+                    if qtime_str:
+                        qdt = datetime.datetime.fromisoformat(qtime_str.replace("Z", "+00:00")).astimezone()
+                    # Only add if matches target_date
+                    if target_date is None or (qdt and qdt.date() == target_date):
+                        tweets.append({
+                            "text": qtext,
+                            "images": qimg_urls,
+                            "time": qdt.strftime("%H:%M") if qdt else "",
+                            "date": qdt.date() if qdt else None,
+                            "quoted": None,
+                            "tweet_id": tid
+                        })
+                except Exception as e:
+                    print(f"⚠️ Error scraping tweet {tid} via permalink: {e}")
+                finally:
+                    new_page.close()
+                    quote_context.close()
+            except Exception as e:
+                print(f"⚠️ Could not open context for tweet {tid}: {e}")
+    # Deduplicate: only by tweet_id (never by (text, time)), except when tweet_id is missing.
+    deduped = {}
+    for t in tweets:
+        tid = t.get("tweet_id")
+        if tid:
+            deduped[tid] = t
+        else:
+            # If no tweet_id, always include (use unique key)
+            deduped[(t["text"], t["time"], id(t))] = t
+    return list(deduped.values())
 
 def main():
     with sync_playwright() as p:
@@ -230,6 +342,7 @@ def main():
                 curr_count = page.locator("article").count()
                 if curr_count > prev_count:
                     break
+            page.wait_for_timeout(2000)
 
             new_tweets = scrape_tweets(page, target_date=None)
             print(f"🔄 Scroll {scroll_attempt + 1} — scraped {len(new_tweets)} tweets")
