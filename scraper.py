@@ -161,22 +161,36 @@ def scrape_tweets(page, tweet_id_to_url, tweet_id_to_time, tweet_id_to_date):
             try:
                 new_page.wait_for_selector("article", timeout=10000)
                 articles = new_page.locator("article")
-                # The main tweet is always the first article
-                main_article = articles.first
+                # Find the main article whose time matches the timeline time
+                timeline_time = tweet_id_to_time.get(tweet_id)
+                main_article = None
+                main_time_str = None
+                main_dt = None
+                for art in articles.all():
+                    art_time_el = art.locator("time")
+                    if art_time_el.count() > 0:
+                        candidate_time_str = art_time_el.first.get_attribute("datetime")
+                        if candidate_time_str:
+                            candidate_dt = datetime.datetime.fromisoformat(candidate_time_str.replace("Z", "+00:00")).astimezone()
+                            candidate_hm = candidate_dt.strftime("%H:%M")
+                            if candidate_hm == timeline_time:
+                                main_article = art
+                                main_time_str = candidate_time_str
+                                main_dt = candidate_dt
+                                break
+                quoted = None
+                quoted_article = None
+                # If failed to match main_article, fallback
+                if main_article is None:
+                    main_article = articles.first
+                    main_time_el = main_article.locator("time")
+                    main_time_str = main_time_el.first.get_attribute("datetime") if main_time_el.count() > 0 else None
+                    if main_time_str:
+                        main_dt = datetime.datetime.fromisoformat(main_time_str.replace("Z", "+00:00")).astimezone()
                 expand_show_more(main_article)
                 main_text = main_article.inner_text().strip()
                 main_imgs = main_article.locator("img").all()
                 main_img_urls = [img.get_attribute("src") for img in main_imgs if img.get_attribute("src") and "media" in img.get_attribute("src")]
-                main_time_el = main_article.locator("time")
-                main_time_str = main_time_el.first.get_attribute("datetime") if main_time_el.count() > 0 else None
-                main_dt = None
-                if main_time_str:
-                    main_dt = datetime.datetime.fromisoformat(main_time_str.replace("Z", "+00:00")).astimezone()
-                else:
-                    # fallback from timeline (never use quoted/nested date!)
-                    main_dt = None
-                quoted = None
-                quoted_article = None
                 quoted_locator = main_article.locator("div[aria-label='Quoted Tweet'] article")
                 if quoted_locator.count() > 0:
                     quoted_article = quoted_locator.first
@@ -200,15 +214,27 @@ def scrape_tweets(page, tweet_id_to_url, tweet_id_to_time, tweet_id_to_date):
                         "images": sub_img_urls,
                         "datetime": sub_dt.strftime("%Y-%m-%d %H:%M") if sub_dt else None
                     }
-                # Compose canonical tweet dict (main_dt always from first/top article)
-                canonical_tweets.append({
-                    "tweet_id": tweet_id,
-                    "text": main_text,
-                    "images": main_img_urls,
-                    "time": main_dt.strftime("%H:%M") if main_dt else tweet_id_to_time.get(tweet_id, ""),
-                    "date": main_dt.date() if main_dt else tweet_id_to_date.get(tweet_id, TARGET_DATE),
-                    "quoted": quoted
-                })
+                # --- PATCH: naked quote fallback ---
+                # Always use timeline date for naked quote fallback, not canonical date
+                if (main_dt is None or main_dt.date() != tweet_id_to_date.get(tweet_id)) and quoted_article is not None:
+                    print(f"⚠️ Naked quote fallback: {tweet_id} | using timeline date/time for synthetic tweet.")
+                    canonical_tweets.append({
+                        "tweet_id": tweet_id,
+                        "text": "",  # No parent text, naked quote
+                        "images": [],
+                        "time": tweet_id_to_time.get(tweet_id, ""),
+                        "date": tweet_id_to_date.get(tweet_id, TARGET_DATE),
+                        "quoted": quoted
+                    })
+                else:
+                    canonical_tweets.append({
+                        "tweet_id": tweet_id,
+                        "text": main_text,
+                        "images": main_img_urls,
+                        "time": main_dt.strftime("%H:%M") if main_dt else tweet_id_to_time.get(tweet_id, ""),
+                        "date": main_dt.date() if main_dt else tweet_id_to_date.get(tweet_id, TARGET_DATE),
+                        "quoted": quoted
+                    })
                 print(f"✅ Canonical: {tweet_id} {main_dt.strftime('%H:%M') if main_dt else tweet_id_to_time.get(tweet_id,'')} {main_text[:40]}...")
             except Exception as e:
                 print(f"⚠️ Error canonical-scraping tweet: {tweet_url} — {e}")
@@ -307,13 +333,13 @@ def main():
             timeline_date = tweet_id_to_date.get(tid)
             if canon_date != TARGET_DATE:
                 print(f"❗Canonical date mismatch: {tid} | canonical={canon_date} | timeline={timeline_date}")
-        # Only keep tweets whose main date matches the target date (ignore quoted/timeline stray tweets)
-        all_tweets = [tweet for tweet in all_tweets if tweet.get('date') == TARGET_DATE]
+        # PATCH: Only keep tweets whose tweet_id_to_date matches the target date
+        all_tweets = [tweet for tweet in all_tweets if tweet_id_to_date.get(tweet.get('tweet_id')) == TARGET_DATE]
 
         for tweet in sorted(all_tweets, key=lambda t: (t.get('date'), t.get('time'))):
             print(f"FinalList: {tweet.get('tweet_id')} {tweet.get('time')} {tweet['text'][:40]}...")
             # Always use the main tweet's date for saving, even if quoted tweet exists
-            save_tweet(tweet, tweet.get('date'))
+            save_tweet(tweet, tweet_id_to_date.get(tweet.get('tweet_id'), TARGET_DATE))
         print(f"✅ Saved {len(all_tweets)} tweets from {TARGET_DATE}.")
         if hasattr(page, "context") and page.context:
             page.context.close()
