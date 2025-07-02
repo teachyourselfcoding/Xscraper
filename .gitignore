@@ -3,3 +3,4 @@
 .gitattributes
 .DS_Store
 /.idea
+/output
