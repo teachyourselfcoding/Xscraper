@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Xscraper - Search Results</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+    <div class="container">
+        <h1>Search Results</h1>
+        <a href="{{ url_for('index') }}" class="back-link">&larr; Back to Search</a>
+
+        {% if tweets %}
+            <ul class="tweet-list">
+                {% for tweet in tweets %}
+                    <li class="tweet-card">
+                        <div class="tweet-header">
+                            <strong class="username">@{{ tweet.username }}</strong>
+                            <time class="tweet-date" datetime="{{ tweet.created_at.isoformat() }}">
+                                {{ tweet.created_at.strftime('%Y-%m-%d %H:%M') if tweet.created_at else '' }}
+                            </time>
+                        </div>
+                        <div class="tweet-text">{{ tweet.text | safe }}</div>
+
+                        {% if tweet.image_urls %}
+                            <p>Tweet has images:</p>
+                            {% for img_path in tweet.image_urls.split(',') if img_path %}
+                                <p>Image filename: {{ img_path }}</p>
+                                <img src="{{ url_for('images', filename=img_path) }}" class="tweet-img" alt="tweet image" />
+                            {% endfor %}
+                        {% else %}
+                            <p>No images for this tweet.</p>
+                        {% endif %}
+
+                        {% if tweet.quoted_tweet %}
+                            <div class="quoted-tweet">
+                                <div class="quoted-header">Quoted Tweet</div>
+                                <div class="quoted-meta">
+                                    <strong class="username">@{{ tweet.quoted_tweet.username }}</strong>
+                                    <time class="tweet-date" datetime="{{ tweet.quoted_tweet.created_at.isoformat() }}">
+                                        {{ tweet.quoted_tweet.created_at.strftime('%Y-%m-%d %H:%M') if tweet.quoted_tweet.created_at else '' }}
+                                    </time>
+                                </div>
+                                <div class="tweet-text">{{ tweet.quoted_tweet.text | safe }}</div>
+
+                                {% if tweet.quoted_tweet.image_urls %}
+                                    <p>Quoted tweet has images:</p>
+                                    {% for img_path in tweet.quoted_tweet.image_urls.split(',') if img_path %}
+                                        <p>Quoted image filename: {{ img_path }}</p>
+                                        <img src="{{ url_for('images', filename=img_path) }}" class="tweet-img" alt="quoted tweet image" />
+                                    {% endfor %}
+                                {% else %}
+                                    <p>No images for this quoted tweet.</p>
+                                {% endif %}
+                            </div>
+                        {% endif %}
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="no-results">No tweets found matching your search.</p>
+        {% endif %}
+    </div>
+</body>
+</html>

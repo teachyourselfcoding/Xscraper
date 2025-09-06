@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Xscraper - Tweet Search</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+    <div class="container">
+        <h1>Xscraper Tweet Archive</h1>
+        <form method="post" action="/" class="search-form">
+            <label for="username">Username:</label>
+            <input type="text" id="username" name="username" placeholder="e.g. Mistery5387057" />
+
+            <label for="start_date">Start date:</label>
+            <input type="date" id="start_date" name="start_date" placeholder="YYYY-MM-DD" />
+
+            <label for="end_date">End date:</label>
+            <input type="date" id="end_date" name="end_date" placeholder="YYYY-MM-DD" />
+
+            <button type="submit">Search</button>
+        </form>
+    </div>
+</body>
+</html>

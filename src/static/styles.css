@@ -1,0 +1,184 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #fafafa;
+    color: #222;
+    margin: 0;
+    padding: 0;
+}
+
+.container {
+    max-width: 900px;
+    margin: 2rem auto;
+    background: #fff;
+    padding: 1.5rem 2rem;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    border-radius: 6px;
+    width: 90vw;
+    box-sizing: border-box;
+}
+
+h1 {
+    font-weight: 700;
+    margin-bottom: 1rem;
+    color: #222;
+}
+
+
+.search-form {
+    display: grid;
+    grid-template-columns: 110px 2.5fr 110px 2.5fr 110px 2.5fr auto;
+    align-items: center;
+    gap: 0.8rem 1rem;
+    margin-bottom: 1.5rem;
+    column-gap: 1.2rem;
+    max-width: 100%;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.search-form label {
+    margin: 0;
+    font-weight: 600;
+    white-space: nowrap;
+    justify-self: end;
+}
+
+.search-form input[type="text"],
+.search-form input[type="date"] {
+    width: 100%;
+    min-width: 180px;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 1rem;
+    box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.1);
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.search-form input[type="text"]:focus,
+.search-form input[type="date"]:focus {
+    border-color: #007bff;
+    box-shadow: 0 0 5px rgba(0,123,255,0.5);
+    outline: none;
+}
+
+.search-form button {
+    padding: 0.5rem 1.5rem;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 1rem;
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
+    justify-self: start;
+    margin-left: 1rem;
+    align-self: center;
+}
+
+.search-form button:hover,
+.search-form button:focus {
+    background-color: #0056b3;
+    box-shadow: 0 0 8px rgba(0,86,179,0.8);
+    outline: none;
+}
+
+@media (max-width: 650px) {
+    .search-form {
+        grid-template-columns: 1fr;
+        row-gap: 0.7rem;
+        column-gap: 0;
+    }
+    .search-form label {
+        justify-self: start;
+    }
+    .search-form button {
+        width: 100%;
+    }
+}
+
+.back-link {
+    display: inline-block;
+    margin-bottom: 1rem;
+    color: #007bff;
+    text-decoration: none;
+}
+
+.back-link:hover {
+    text-decoration: underline;
+}
+
+.tweet-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.tweet-card {
+    border-bottom: 1px solid #ddd;
+    padding: 1rem 0;
+}
+
+.tweet-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+
+.username {
+    font-weight: 700;
+    color: #1da1f2;
+}
+
+.tweet-date {
+    font-size: 0.85rem;
+    color: #555;
+}
+
+.tweet-text {
+    white-space: pre-wrap;
+    line-height: 1.4;
+    margin-bottom: 0.8rem;
+}
+
+.tweet-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.tweet-img {
+    max-width: 140px;
+    max-height: 140px;
+    object-fit: cover;
+    border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+
+.quoted-tweet {
+    background: #f5f8fa;
+    border-left: 4px solid #1da1f2;
+    padding: 0.8rem 1rem;
+    margin-top: 0.6rem;
+    border-radius: 4px;
+}
+
+.quoted-header {
+    font-weight: 700;
+    margin-bottom: 0.3rem;
+    color: #555;
+}
+
+.quoted-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+
+.no-results {
+    font-style: italic;
+    color: #666;
+    margin-top: 1.5rem;
+}
